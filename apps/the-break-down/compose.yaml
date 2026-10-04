@@ -1,0 +1,24 @@
+services:
+  analysis:
+    build: .
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      ENGINE_TOKEN: ${ENGINE_TOKEN:?A private service token is required}
+      MOBSF_URL: http://mobsf:8000
+      MOBSF_API_KEY: ${MOBSF_API_KEY:?The MobSF API key is required}
+    volumes: ["analysis-data:/data"]
+    mem_limit: 4g
+    cpus: 2
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+  mobsf:
+    build:
+      context: https://github.com/MobSF/Mobile-Security-Framework-MobSF.git#7a4785fb3b55949231dd2b5d7df82ccba02a114f
+    volumes: ["mobsf-data:/home/mobsf/.MobSF"]
+    mem_limit: 3g
+    cpus: 2
+    restart: unless-stopped
+volumes:
+  analysis-data:
+  mobsf-data:

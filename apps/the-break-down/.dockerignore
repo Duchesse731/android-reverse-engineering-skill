@@ -1,0 +1,8 @@
+.git
+.openai
+dist
+web
+tests
+data
+.env
+**/__pycache__
