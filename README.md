@@ -4,9 +4,9 @@
 
 A Claude Code skill that decompiles Android APK/XAPK/JAR/AAR files and **extracts the HTTP APIs** used by the app — Retrofit endpoints, OkHttp calls, hardcoded URLs, authentication patterns — so you can document and reproduce them without the original source code.
 
-> **First-class Kotlin support**: modern Android apps are Kotlin/KMP, heavily obfuscated with R8. This skill recovers the **original Kotlin class names** from metadata R8 cannot strip, and extracts APIs from **Ktor**, **Apollo (GraphQL)** and **Koin** — not just the classic Retrofit/OkHttp stack. See [Kotlin name recovery](#kotlin-name-recovery-r8-deobfuscation) below.
+> **Kotlin analysis**: inspect surviving coroutine owner hints and unverified class metadata candidates. Recovery depends on the build and is not guaranteed. Search Ktor, Apollo (GraphQL), and Koin as well as Retrofit/OkHttp.
 
-> **Windows / PowerShell support (experimental)**: The `*.ps1` scripts alongside the bash ones are a recent community contribution, still being stabilised. For any issues please open an issue on **this** repository (not on the contributors' upstream forks): the PowerShell scripts are maintained here by [@SimoneAvogadro](https://github.com/SimoneAvogadro).
+> **Windows / PowerShell support**: decompilation and API searches have PowerShell helpers. Fingerprinting and Kotlin name indexing use shared Python 3 implementations. Windows execution requires validation on your target system; the Linux regression checks do not certify Windows.
 
 ## Table of Contents
 
@@ -26,7 +26,7 @@ A Claude Code skill that decompiles Android APK/XAPK/JAR/AAR files and **extract
 |------------|-------------|
 | **Fingerprint first (Phase 0)** | Triage an APK/XAPK in seconds — detect the framework (Flutter / React Native / Cordova / Xamarin / native-Kotlin), HTTP stack, obfuscation level and native libs *before* spending time on a full decompile |
 | **Decompile** | APK, XAPK, JAR, and AAR files using jadx and Fernflower/Vineflower (single engine or side-by-side comparison) |
-| **Recover Kotlin names** | Rebuild original `*Repository` / `*ViewModel` / `*UseCase` class names from R8-obfuscated binaries using Kotlin metadata that R8 cannot strip |
+| **Recover Kotlin names** | Index surviving coroutine owner hints and unverified metadata self descriptors; validate before renaming |
 | **Extract APIs** | Retrofit, OkHttp, Volley **and modern Kotlin/KMP stacks: Ktor, Apollo (GraphQL), Koin DI** — endpoints, hardcoded URLs, auth headers, tokens and HMAC request-signing schemes |
 | **Trace call flows** | From Activities/Fragments through ViewModels and repositories down to HTTP calls |
 | **Analyze structure** | Manifest, packages, architecture patterns |
@@ -37,6 +37,8 @@ A Claude Code skill that decompiles Android APK/XAPK/JAR/AAR files and **extract
 **Required:**
 
 - Java JDK 17+
+- Python 3 (also required for verified direct downloads)
+- Bash 4+ and `unzip` for the Bash helpers, or PowerShell for Windows
 - [jadx](https://github.com/skylot/jadx) (CLI)
 
 **Optional (recommended):**
@@ -53,7 +55,7 @@ See `plugins/android-reverse-engineering/skills/android-reverse-engineering/refe
 Inside Claude Code, run:
 
 ```text
-/plugin marketplace add SimoneAvogadro/android-reverse-engineering-skill
+/plugin marketplace add Duchesse731/android-reverse-engineering-skill
 /plugin install android-reverse-engineering@android-reverse-engineering-skill
 ```
 
@@ -62,7 +64,7 @@ The skill will be permanently available in all future sessions.
 ### From a local clone
 
 ```bash
-git clone https://github.com/SimoneAvogadro/android-reverse-engineering-skill.git
+git clone https://github.com/Duchesse731/android-reverse-engineering-skill.git
 ```
 
 Then in Claude Code:
@@ -133,19 +135,17 @@ bash plugins/android-reverse-engineering/skills/android-reverse-engineering/scri
 
 ### Kotlin name recovery (R8 deobfuscation)
 
-Most real-world Kotlin/KMP apps ship through R8, so the decompiled classes come
-out as `a.b.c`. R8 renames the JVM symbols but **cannot strip the Kotlin
-metadata strings** — the Kotlin runtime (reflection, coroutines) needs the
-original fully-qualified names at runtime. This skill mines those
-`@DebugMetadata` / `@Metadata` annotations to rebuild an `obfuscated → real`
-class-name map. On a typical app it recovers ~100 % of the
-`*Repository` / `*ViewModel` / `*UseCase` / `*Impl` classes you actually want to
-read.
+Kotlin annotations may retain useful names, but shrinkers can remove or rewrite
+metadata. The helper indexes `@DebugMetadata` coroutine-owner associations in
+`mapping.json` and labels them as hints. It keeps possible self descriptors from
+`@Metadata.d2` separately in `candidates.json`; arbitrary referenced types are
+never assigned as the current class's name. Check `evidence.json` and call sites
+before using a hint. No recovery percentage is promised.
 
 ```bash
 # 1. Build the mapping from the decompiled sources
 bash plugins/android-reverse-engineering/skills/android-reverse-engineering/scripts/recover-kotlin-names.sh output/sources/ output/names/
-#    → output/names/mapping.tsv, mapping.json, by_package/
+#    → output/names/mapping.tsv, mapping.json, evidence.json, candidates.json, by_package/
 
 # 2. Query it: resolve an obfuscated name, search by real name, or grep
 #    the sources with each hit annotated with its recovered class name
@@ -153,6 +153,23 @@ bash plugins/android-reverse-engineering/skills/android-reverse-engineering/scri
 bash plugins/android-reverse-engineering/skills/android-reverse-engineering/scripts/lookup-name.sh output/names/ -o a.b.c
 bash plugins/android-reverse-engineering/skills/android-reverse-engineering/scripts/lookup-name.sh output/names/ --grep 'login' output/sources/
 ```
+
+## Operational notes
+
+- Use a fresh output directory for each decompile. Existing nonempty output is
+  rejected to prevent stale sources from masking a failed run.
+- AAR analysis with Fernflower extracts `classes.jar` and `libs/*.jar`; it does
+  not send the AAR through dex2jar. Sources are under per-JAR subdirectories.
+- Direct GitHub dependency downloads must match the release asset's published
+  SHA-256 digest before extraction or installation. If a digest is unavailable,
+  use a package manager or verify and install the tool manually.
+- Bash retains usable partial decompiler results with warnings; Windows returns
+  exit 1 for partial or failed requested runs even when sources were retained.
+  Inspect warnings and output instead of treating an exit code as certification.
+- API matches and host buckets are candidates, not proof of backend ownership,
+  endpoint availability, or authorization. Inspect third-party results too.
+- No GUI, browser upload server, or automatic app rebuild is included.
+- Run regression checks with `python3 -m unittest discover -s tests -v`.
 
 ## Repository Structure
 

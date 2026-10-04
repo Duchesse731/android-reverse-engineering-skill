@@ -12,6 +12,22 @@ missing_optional=()
 echo "=== Android Reverse Engineering: Dependency Check ==="
 echo
 
+# Helpers also require Python and GNU-compatible shell utilities.
+for dep in python3 unzip; do
+  if command -v "$dep" &>/dev/null; then
+    echo "[OK] $dep detected"
+  else
+    echo "[MISSING] $dep is required by bundled helpers"
+    errors=$((errors + 1))
+    missing_required+=("$dep")
+  fi
+done
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "[MISSING] Bash 4+ is required; macOS system Bash 3 is unsupported"
+  errors=$((errors + 1))
+  missing_required+=("bash")
+fi
+
 # --- Java ---
 java_ok=false
 if command -v java &>/dev/null; then

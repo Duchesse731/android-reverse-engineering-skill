@@ -120,11 +120,17 @@ pkg_install() {
 download() {
   local url="$1" dest="$2"
   if command -v curl &>/dev/null; then
-    curl -fsSL -o "$dest" "$url"
+    curl -fsSL -o "$dest" "$url" || return 1
   elif command -v wget &>/dev/null; then
-    wget -q -O "$dest" "$url"
+    wget -q -O "$dest" "$url" || return 1
   else
     fail "Neither curl nor wget available."
+    return 1
+  fi
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if ! python3 "$here/verify-release.py" "$url" "$dest"; then
+    rm -f "$dest"
     return 1
   fi
 }
@@ -187,7 +193,7 @@ install_java() {
   esac
 
   # Verify
-  if command -v java &>/dev/null; then
+  if command -v java &>/dev/null && java -version 2>&1 | head -1 | grep -qE '"(1[7-9]|[2-9][0-9])([.\"]|$)'; then
     ok "Java installed: $(java -version 2>&1 | head -1)"
   else
     fail "Java installation may require PATH update."
@@ -259,7 +265,7 @@ install_vineflower() {
   fi
   for candidate in \
     "${FERNFLOWER_JAR_PATH:-}" \
-    "$HOME/vineflower/vineflower.jar" \
+    "$HOME/.local/share/vineflower/vineflower.jar" \
     "$HOME/fernflower/fernflower.jar" \
     "$HOME/fernflower/build/libs/fernflower.jar" \
     "$HOME/vineflower/build/libs/vineflower.jar"; do
@@ -294,7 +300,10 @@ install_vineflower() {
   mkdir -p "$install_dir"
 
   info "Downloading Vineflower $version..."
-  download "$url" "$install_dir/vineflower.jar"
+  local tmp_jar
+  tmp_jar=$(mktemp /tmp/vineflower-XXXXXX.jar)
+  download "$url" "$tmp_jar" || { rm -f "$tmp_jar"; manual "Use a package manager or verify Vineflower manually."; }
+  mv "$tmp_jar" "$install_dir/vineflower.jar"
 
   # Create wrapper script
   mkdir -p "$HOME/.local/bin"
@@ -434,6 +443,10 @@ install_adb() {
 # =====================================================================
 
 case "$DEP" in
+  python3)
+    if [[ "$PKG_MANAGER" == brew ]]; then pkg_install python; else pkg_install python3; fi ;;
+  unzip) pkg_install unzip ;;
+  bash) pkg_install bash ;;
   java)        install_java ;;
   jadx)        install_jadx ;;
   vineflower|fernflower)  install_vineflower ;;
@@ -442,7 +455,7 @@ case "$DEP" in
   adb)         install_adb ;;
   *)
     echo "Error: Unknown dependency '$DEP'" >&2
-    echo "Available: java, jadx, vineflower, dex2jar, apktool, adb" >&2
+    echo "Available: python3, unzip, bash, java, jadx, vineflower, dex2jar, apktool, adb" >&2
     exit 1
     ;;
 esac

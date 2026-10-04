@@ -18,7 +18,10 @@ You are starting the Android reverse engineering workflow. Follow these steps:
 
 If the user provided a file path as an argument, use that. Otherwise, ask the user for the path to the APK, XAPK, JAR, or AAR file they want to decompile.
 
-### Step 2: Check and install dependencies
+### Step 2: Fingerprint and check dependencies
+
+For APK/XAPK inputs, run `fingerprint.sh` (or `fingerprint.ps1` on Windows) before full decompilation. If Python 3 is missing, install it first. Follow framework-specific analysis when the app is Flutter, React Native, Cordova, or Xamarin.
+
 
 Run the dependency check:
 

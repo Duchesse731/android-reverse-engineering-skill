@@ -47,7 +47,7 @@ def search(q):
 def by_obf(o):
     if o not in MAP:
         print(f"no mapping for {o}", file=sys.stderr); sys.exit(1)
-    print(f"{o}  ->  {MAP[o]}")
+    print(f"{o}  ->  {MAP[o]} (coroutine owner hint; validate before renaming)")
     sibs = [s for s in REV[MAP[o]] if s != o]
     for s in sorted(sibs):
         print(f"    sibling: {s}")
@@ -71,7 +71,7 @@ def grep_annot(pattern, sources):
             continue
         rel = os.path.relpath(path, sources)
         obf = rel.replace(os.sep, ".")[:-5]
-        suffix = f"  // {MAP[obf]}" if obf in MAP else ""
+        suffix = f"  // owner hint: {MAP[obf]}" if obf in MAP else ""
         print(f"{rel}:{lineno}:{content}{suffix}")
 
 if args[0] == "-o" and len(args) == 2:

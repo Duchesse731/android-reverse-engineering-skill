@@ -151,9 +151,7 @@ grep -rhoE '"(/[A-Za-z0-9_{}.\-]+(/[A-Za-z0-9_{}.\-]+)+/?|(api|v[0-9]+|graphql|u
 ```
 
 The skill ships this as `find-api-calls.sh --paths`, which prints both a
-deduplicated inventory and the full list of call sites. On real-world
-Kotlin apps this single command typically produces 100–300 distinct
-endpoint paths, which is the most useful first artifact for documentation.
+deduplicated inventory and the full list of call sites. Treat these paths as candidates: matches depend on the app, and paths may belong to files or third-party SDKs rather than active API calls.
 
 ## Hardcoded URLs and Secrets
 

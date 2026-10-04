@@ -12,6 +12,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 
 function Show-Usage {
     Write-Host @"
@@ -58,6 +59,26 @@ function Invoke-Download {
     Write-Info "Downloading $Url..."
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing
+    $python = $null
+    $pythonPrefix = @()
+    foreach ($name in @('python3', 'python', 'py')) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd) {
+            $prefix = @(); if ($name -eq 'py') { $prefix = @('-3') }
+            $previousPreference = $ErrorActionPreference
+            $probeCode = 1
+            try {
+                $ErrorActionPreference = 'Continue'
+                $LASTEXITCODE = 1
+                & $cmd.Source @prefix -c 'import sys; assert sys.version_info.major == 3' 2>$null
+                $probeCode = $LASTEXITCODE
+            } finally { $ErrorActionPreference = $previousPreference }
+            if ($probeCode -eq 0) { $python = $cmd.Source; $pythonPrefix = $prefix; break }
+        }
+    }
+    if (-not $python) { Remove-Item -LiteralPath $Dest -Force; throw 'Python 3 is required to verify release downloads.' }
+    & $python @pythonPrefix (Join-Path $PSScriptRoot 'verify-release.py') $Url $Dest
+    if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $Dest -Force; throw 'Release SHA-256 verification failed; use a package manager or verify manually.' }
 }
 
 # --- Helper: get latest GitHub release tag ---
@@ -89,17 +110,23 @@ $localShare = Join-Path $env:USERPROFILE '.local\share'
 # Dependency installers
 # =====================================================================
 
+function Get-JavaMajor {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $LASTEXITCODE = 1
+        $lines = @(& java -version 2>&1)
+        if ($LASTEXITCODE -ne 0) { return 0 }
+        $text = $lines -join ' '
+        if ($text -match '"(\d+)') { return [int]$Matches[1] }
+        return 0
+    } finally { $ErrorActionPreference = $previousPreference }
+}
 function Install-Java {
     $javaBin = Get-Command java -ErrorAction SilentlyContinue
-    if ($javaBin) {
-        $verOutput = & java -version 2>&1 | Select-Object -First 1
-        if ("$verOutput" -match '"(\d+)') {
-            $ver = [int]$Matches[1]
-            if ($ver -ge 17) {
-                Write-Ok "Java $ver already installed"
-                return
-            }
-        }
+    if ($javaBin -and (Get-JavaMajor) -ge 17) {
+        Write-Ok 'Java 17+ already installed'
+        return
     }
 
     Write-Info "Installing Java JDK 17+..."
@@ -116,10 +143,13 @@ function Install-Java {
         Write-Manual "Install Java JDK 17+ from https://adoptium.net/"
     }
 
+    if ($LASTEXITCODE -ne 0) { throw 'Java package-manager installation failed.' }
+    # Refresh persisted paths before validating the actual new Java version.
+    $env:PATH = [Environment]::GetEnvironmentVariable('PATH','User') + ';' + [Environment]::GetEnvironmentVariable('PATH','Machine') + ';' + $env:PATH
     # Verify
     $javaBin = Get-Command java -ErrorAction SilentlyContinue
-    if ($javaBin) {
-        Write-Ok "Java installed: $(& java -version 2>&1 | Select-Object -First 1)"
+    if ($javaBin -and (Get-JavaMajor) -ge 17) {
+        Write-Ok "Java 17+ installed"
     } else {
         Write-Fail "Java installation may require a terminal restart for PATH update."
         exit 1
@@ -136,6 +166,7 @@ function Install-Jadx {
     if ($hasScoop) {
         Write-Info "Installing jadx via scoop..."
         scoop install jadx
+        if ($LASTEXITCODE -ne 0) { throw 'Package-manager installation failed.' }
         if (Get-Command jadx -ErrorAction SilentlyContinue) {
             Write-Ok "jadx installed via scoop"
             return
@@ -209,7 +240,9 @@ function Install-Vineflower {
     $installDir = Join-Path $localShare 'vineflower'
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 
-    Invoke-Download -Url $url -Dest (Join-Path $installDir 'vineflower.jar')
+    $tmpJar = Join-Path $env:TEMP "vineflower-$version-$([Guid]::NewGuid()).jar"
+    Invoke-Download -Url $url -Dest $tmpJar
+    Move-Item -LiteralPath $tmpJar -Destination (Join-Path $installDir 'vineflower.jar') -Force
 
     # Create wrapper batch file
     New-Item -ItemType Directory -Path $localBin -Force | Out-Null
@@ -283,9 +316,11 @@ function Install-Apktool {
     if ($hasScoop) {
         Write-Info "Installing apktool via scoop..."
         scoop install apktool
+        if ($LASTEXITCODE -ne 0) { throw 'Package-manager installation failed.' }
     } elseif ($hasChoco) {
         Write-Info "Installing apktool via choco..."
         choco install apktool -y
+        if ($LASTEXITCODE -ne 0) { throw 'Package-manager installation failed.' }
     } else {
         Write-Manual "Install apktool from https://apktool.org/docs/install"
     }
@@ -307,12 +342,15 @@ function Install-Adb {
     if ($hasScoop) {
         Write-Info "Installing adb via scoop..."
         scoop install adb
+        if ($LASTEXITCODE -ne 0) { throw 'Package-manager installation failed.' }
     } elseif ($hasChoco) {
         Write-Info "Installing adb via choco..."
         choco install adb -y
+        if ($LASTEXITCODE -ne 0) { throw 'Package-manager installation failed.' }
     } elseif ($hasWinget) {
         Write-Info "Installing via winget..."
         winget install Google.PlatformTools --accept-source-agreements --accept-package-agreements
+        if ($LASTEXITCODE -ne 0) { throw 'Package-manager installation failed.' }
     } else {
         Write-Manual "Install Android SDK Platform Tools from https://developer.android.com/tools/releases/platform-tools"
     }
@@ -330,6 +368,13 @@ function Install-Adb {
 # =====================================================================
 
 switch ($Dep) {
+    'python3' {
+        if ($hasWinget) { winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements }
+        elseif ($hasScoop) { scoop install python }
+        elseif ($hasChoco) { choco install python -y }
+        else { Write-Manual 'Install Python 3 from https://www.python.org/downloads/' }
+        if ($LASTEXITCODE -ne 0) { throw 'Python installation failed.' }
+    }
     'java'        { Install-Java }
     'jadx'        { Install-Jadx }
     'vineflower'  { Install-Vineflower }

@@ -167,18 +167,18 @@ When code is obfuscated (ProGuard/R8):
 - Method names → `a()`, `b()`, `c()`
 - Field names → `f1234a`, `f1235b`
 
-### What does NOT get obfuscated
-- **String literals** — URLs, keys, error messages remain readable
+### Useful anchors when retained
+- **String literals** — URLs, keys, and messages may remain readable, unless protected
 - **Android framework classes** — `Activity`, `Fragment`, `Intent` keep their names
-- **Library public APIs** — Retrofit annotations, OkHttp builders retain names
-- **AndroidManifest entries** — Activity/Service names must be real
+- **Library APIs** — retained annotations and builder methods can reveal calls
+- **AndroidManifest entries** — component names must resolve, but may be obfuscated
 
 ### Strategy for obfuscated code
 
 1. **Start from strings**: Search for URLs, error messages, and known constants
 2. **Start from framework classes**: Activities and Fragments are named in the manifest
 3. **Follow library calls**: Retrofit `@GET`/`@POST` annotations are readable even when the interface class name is obfuscated
-4. **Recover original Kotlin names from metadata**: `@DebugMetadata` and `@Metadata.d2` strings preserve the original FQNs even after R8 obfuscation. Run `scripts/recover-kotlin-names.sh` to build an `obf -> real` map (typically recovers 30-50% of classes — and almost 100% of `*Repository` / `*ViewModel` / `*Impl`). See [`kotlin-name-recovery.md`](./kotlin-name-recovery.md). This is the single highest-leverage step on any Kotlin app.
+4. **Index Kotlin owner hints**: Run `scripts/recover-kotlin-names.sh` and inspect `evidence.json` and `candidates.json`. Validate metadata hints against declarations and call sites. See [`kotlin-name-recovery.md`](./kotlin-name-recovery.md).
 5. **Cross-reference**: If `class a` calls `Retrofit.create(b.class)`, then `b` is a Retrofit service interface
 6. **`--deobf` is rarely enough on its own**: jadx's `--deobf` renames obfuscated symbols with synthetic placeholders (`p001a`, `C0123Foo`) — useful for disambiguation but it does **not** recover original names. Pair it with the metadata recovery above.
 

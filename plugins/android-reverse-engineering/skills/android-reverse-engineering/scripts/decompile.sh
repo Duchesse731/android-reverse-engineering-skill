@@ -35,7 +35,7 @@ Examples:
   decompile.sh --engine both --deobf app-release.apk
   decompile.sh --engine fernflower library.jar
 EOF
-  exit 0
+  exit "${1:-0}"
 }
 
 # --- Parse arguments ---
@@ -52,7 +52,7 @@ while [[ $# -gt 0 ]]; do
     --no-res)      NO_RES=true; shift ;;
     --engine)      ENGINE="$2"; shift 2 ;;
     -h|--help)     usage ;;
-    -*)            echo "Error: Unknown option $1" >&2; usage ;;
+    -*)            echo "Error: Unknown option $1" >&2; usage 1 ;;
     *)             INPUT_FILE="$1"; shift ;;
   esac
 done
@@ -60,7 +60,7 @@ done
 # --- Validate input ---
 if [[ -z "$INPUT_FILE" ]]; then
   echo "Error: No input file specified." >&2
-  usage
+  usage 1
 fi
 
 if [[ ! -f "$INPUT_FILE" ]]; then
@@ -87,10 +87,15 @@ case "$ENGINE" in
 esac
 
 BASENAME=$(basename "$INPUT_FILE" ".$ext_lower")
-INPUT_FILE_ABS=$(realpath "$INPUT_FILE")
+INPUT_FILE_ABS=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$INPUT_FILE")
 
 if [[ -z "$OUTPUT_DIR" ]]; then
   OUTPUT_DIR="${BASENAME}-decompiled"
+fi
+
+if [[ -d "$OUTPUT_DIR" ]] && [[ -n "$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+  echo "Error: Output directory is not empty; choose a fresh -o directory." >&2
+  exit 1
 fi
 
 # --- XAPK handling ---
@@ -98,6 +103,7 @@ fi
 # We extract it, find all APKs inside, and decompile each one.
 XAPK_EXTRACTED_DIR=""
 XAPK_APK_FILES=()
+trap '[[ -z "$XAPK_EXTRACTED_DIR" ]] || rm -rf "$XAPK_EXTRACTED_DIR"' EXIT
 
 if [[ "$ext_lower" == "xapk" ]]; then
   XAPK_EXTRACTED_DIR=$(mktemp -d "${TMPDIR:-/tmp}/xapk-extract-XXXXXX")
@@ -114,7 +120,7 @@ if [[ "$ext_lower" == "xapk" ]]; then
   # Find all APK files inside
   while IFS= read -r -d '' apk_file; do
     XAPK_APK_FILES+=("$apk_file")
-  done < <(find "$XAPK_EXTRACTED_DIR" -name "*.apk" -print0 | sort -z)
+  done < <(find "$XAPK_EXTRACTED_DIR" -name "*.apk" -print0)
 
   if [[ ${#XAPK_APK_FILES[@]} -eq 0 ]]; then
     echo "Error: No APK files found inside XAPK archive." >&2
@@ -137,6 +143,7 @@ find_fernflower_jar() {
   fi
   # Check common locations
   for candidate in \
+    "$HOME/.local/share/vineflower/vineflower.jar" \
     "$HOME/fernflower/build/libs/fernflower.jar" \
     "$HOME/vineflower/build/libs/vineflower.jar" \
     "$HOME/fernflower/fernflower.jar" \
@@ -191,7 +198,7 @@ run_jadx() {
     echo "Java files decompiled by jadx: $count"
   fi
 
-  if [[ $jadx_status -eq 0 ]]; then
+  if [[ $jadx_status -eq 0 && $count -gt 0 ]]; then
     return 0
   fi
 
@@ -224,8 +231,8 @@ run_fernflower() {
 
   mkdir -p "$out_dir"
 
-  # For APK/AAR, we need dex2jar first to convert DEX→JAR
-  if [[ "$ext_lower" == "apk" || "$ext_lower" == "aar" ]]; then
+  # APK contains DEX; AAR contains JVM classes.jar and optional libs/*.jar.
+  if [[ "$ext_lower" == "apk" ]]; then
     local d2j
     if ! d2j=$(find_dex2jar); then
       echo "Error: dex2jar is required to use Fernflower on .$ext_lower files." >&2
@@ -249,6 +256,41 @@ run_fernflower() {
       echo "Warning: dex2jar exited with status $d2j_status but produced $converted_jar; continuing." >&2
     fi
     jar_to_decompile="$converted_jar"
+  elif [[ "$ext_lower" == "aar" ]]; then
+    mkdir -p "$intermediate_dir/aar"
+    python3 - "$INPUT_FILE_ABS" "$intermediate_dir/aar" <<'AAR'
+import pathlib, re, sys, zipfile
+root = pathlib.Path(sys.argv[2]).resolve()
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    for member in archive.infolist():
+        if member.filename == 'classes.jar' or re.fullmatch(r'libs/[^/]+\.jar', member.filename):
+            target = root / member.filename
+            if target.parent.resolve() != root and target.parent.resolve() != root / 'libs':
+                raise ValueError('Invalid AAR library path')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(archive.read(member))
+AAR
+    local aar_jars=()
+    while IFS= read -r -d '' aar_jar; do aar_jars+=("$aar_jar"); done < <(find "$intermediate_dir/aar" -name '*.jar' -type f -print0)
+    if [[ ${#aar_jars[@]} -eq 0 ]]; then
+      echo "Error: AAR contains no classes.jar or libs/*.jar bytecode." >&2
+      return 1
+    fi
+    local aar_failed=false aar_index=0
+    for aar_jar in "${aar_jars[@]}"; do
+      aar_index=$((aar_index + 1))
+      local child_status=0
+      if ( INPUT_FILE_ABS="$aar_jar"; ext_lower=jar; run_fernflower "$out_dir/$aar_index-$(basename "$aar_jar" .jar)" ); then
+        child_status=0
+      else
+        child_status=$?
+      fi
+      [[ $child_status -eq 0 ]] || aar_failed=true
+    done
+    count=$(find "$out_dir" -path '*/intermediate' -prune -o -name '*.java' -type f -print | wc -l)
+    if [[ $count -eq 0 ]]; then return 1; fi
+    [[ "$aar_failed" == false ]] || return 2
+    return 0
   else
     jar_to_decompile="$INPUT_FILE_ABS"
   fi
@@ -353,7 +395,7 @@ print_structure() {
     echo "Top-level packages ($label):"
     while IFS= read -r pkg; do
       [[ -n "$pkg" ]] && packages+=("$pkg")
-    done < <(find "$src_dir" -mindepth 1 -maxdepth 3 -type d -printf '%P\n' | sort)
+    done < <(find "$src_dir" -mindepth 1 -maxdepth 3 -type d | sed "s#^$src_dir/##" | sort)
 
     local limit=${#packages[@]}
     if (( limit > 20 )); then
@@ -431,7 +473,7 @@ decompile_single() {
         jadx_status=$?
       fi
       if [[ $jadx_status -eq 1 ]]; then
-        return 1
+        echo "Warning: jadx failed; trying Fernflower independently." >&2
       fi
       if [[ $jadx_status -eq 2 ]]; then
         echo "Continuing to Fernflower because jadx produced usable output despite warnings."
@@ -443,8 +485,11 @@ decompile_single() {
       else
         ff_status=$?
       fi
-      if [[ $ff_status -eq 1 ]]; then
+      if [[ $ff_status -eq 1 && $jadx_status -eq 1 ]]; then
         return 1
+      fi
+      if [[ $ff_status -eq 1 ]]; then
+        echo "Warning: Fernflower failed; retaining usable jadx output." >&2
       fi
       if [[ $ff_status -eq 2 ]]; then
         echo "Continuing with Fernflower output because it produced usable sources despite warnings."
@@ -512,15 +557,28 @@ if [[ "$ext_lower" == "xapk" ]]; then
     echo
   fi
 
+  code_apks=0
   for apk_file in "${XAPK_APK_FILES[@]}"; do
+    apk_listing=$(unzip -Z1 "$apk_file")
+    if ! grep -qE '^classes[0-9]*\.dex$' <<< "$apk_listing"; then
+      echo "Skipping resource-only split: $(basename "$apk_file") (no DEX code)"
+      continue
+    fi
+    code_apks=$((code_apks + 1))
     apk_name=$(basename "$apk_file" .apk)
     echo
     echo "======================================================"
     decompile_single "$apk_file" "$OUTPUT_DIR/$apk_name" "$apk_name.apk"
   done
 
+  if [[ $code_apks -eq 0 ]]; then
+    echo "Error: XAPK contains no APK with DEX code." >&2
+    exit 1
+  fi
+
   # Cleanup extracted XAPK
   rm -rf "$XAPK_EXTRACTED_DIR"
+  XAPK_EXTRACTED_DIR=""
 
   echo
   echo "=== XAPK decompilation complete ==="

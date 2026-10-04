@@ -10,7 +10,7 @@ Decompile Android APK, XAPK, JAR, and AAR files using jadx and Fernflower/Vinefl
 
 ## Prerequisites
 
-This skill requires **Java JDK 17+** and **jadx** to be installed. **Fernflower/Vineflower** and **dex2jar** are optional but recommended for better decompilation quality. Run the dependency checker to verify:
+Require **Java JDK 17+**, **jadx**, and **Python 3**. Use **Bash 4+** plus **unzip** for Bash helpers, or PowerShell on Windows. **Fernflower/Vineflower** and **dex2jar** are optional but recommended for better decompilation quality. Run the dependency checker to verify:
 
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/scripts/check-deps.sh
@@ -21,7 +21,7 @@ On Windows (PowerShell):
 & "${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/scripts/check-deps.ps1"
 ```
 
-If anything is missing, follow the installation instructions in `${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/references/setup-guide.md`.
+Install Python 3 before tools downloaded directly from GitHub. Direct downloads require a published SHA-256 asset digest; if missing, use a package manager or verified manual installation. If anything is missing, follow the installation instructions in `${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/references/setup-guide.md`.
 
 ## Workflow
 
@@ -36,10 +36,12 @@ lives elsewhere. The fingerprint script tells you which.
 bash ${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/scripts/fingerprint.sh <file.apk|file.xapk>
 ```
 
+On Windows, invoke `fingerprint.ps1 <file.apk|file.xapk>`; it uses the same Python implementation. Treat detections as heuristic evidence. If no DEX descriptors can be read, obfuscation is unknown.
+
 It prints, in one screen:
 
 - **Mobile framework** (Flutter / React Native / Cordova / Xamarin / Native Kotlin / etc.) with the file marker that triggered the verdict.
-- **HTTP stack** (Retrofit, OkHttp, Ktor, Apollo, Volley) detected via DEX string scan — works even when class names are obfuscated.
+- **HTTP stack** (Retrofit, OkHttp, Ktor, Apollo, Volley) detected via DEX string scan — detects surviving recognizable descriptors; fully renamed libraries may be missed.
 - **DI / serialization** signals (Hilt, Dagger, Koin, kotlinx.serialization, Moshi, Gson, Jackson).
 - **Obfuscation level** estimate based on root-level short-named packages.
 - **Notable third-party SDKs** (AppsFlyer, Datadog, Sentry, Firebase, payment SDKs, support/chat SDKs, etc.).
@@ -85,7 +87,7 @@ The install script detects the OS and package manager, then:
 - Uses sudo and the system package manager when necessary (apt, dnf, pacman)
 - If sudo is needed but unavailable or the user declines, it prints the exact manual command and exits with code 2 — show these instructions to the user
 
-**Windows notes**: The PowerShell install script uses `winget`, `scoop`, or `choco` (in that order). If none are available, it downloads directly to `%USERPROFILE%\.local\share\` and adds the directory to the user's PATH. After running `install-dep.ps1`, the PATH is persisted but the current terminal session may not see it. The `check-deps.ps1` and `decompile.ps1` scripts automatically refresh PATH from the user environment, so re-running them will find newly installed tools without restarting the terminal.
+**Windows notes**: Package-manager selection depends on the dependency; direct download is a fallback. If none are available, it downloads directly to `%USERPROFILE%\.local\share\` and adds the directory to the user's PATH. After running `install-dep.ps1`, the PATH is persisted but the current terminal session may not see it. The `check-deps.ps1` and `decompile.ps1` scripts automatically refresh PATH from the user environment, so re-running them will find newly installed tools without restarting the terminal.
 
 **For optional dependencies**, ask the user if they want to install them. Vineflower and dex2jar are recommended for best results.
 
@@ -108,7 +110,7 @@ On Windows (PowerShell):
 
 For **XAPK** files (ZIP bundles containing multiple APKs, used by APKPure and similar stores): the script automatically extracts the archive, identifies all APK files inside (base + split APKs), and decompiles each one into a separate subdirectory. The XAPK manifest is copied to the output for reference.
 
-**Split/bundled APK detection**: Some APKs are actually bundle wrappers — the outer APK contains `base.apk` plus `split_config.*.apk` files inside its resources directory. When this happens, jadx will decompile the thin wrapper and produce very few Java files. The decompile scripts automatically detect this (≤10 Java files + inner APKs present) and re-decompile `base.apk` into an `<output>/base/` subdirectory. Config-only splits (ABI, language, density) are skipped. The main decompiled source will be in `<output>/base/sources/`.
+**Split/bundled APK detection**: Some APKs are actually bundle wrappers — the outer APK contains `base.apk` plus `split_config.*.apk` files inside its resources directory. When this happens, jadx will decompile the thin wrapper and produce very few Java files. The decompile scripts automatically detect this (≤10 Java files + inner APKs present) and re-decompile `base.apk` into an `<output>/base/` subdirectory. Config-only splits (ABI, language, density) are skipped. For jadx, the main decompiled source is under `<output>/base/sources/`; with both engines inspect `<output>/base/jadx/sources/` and `<output>/base/fernflower/`. Windows scans resource subdirectories for nested APKs and can use different split labels.
 
 Options:
 - `-o <dir>` — Custom output directory (default: `<filename>-decompiled`)
@@ -128,7 +130,7 @@ Options:
 
 When using `--engine both`, the outputs go into `<output>/jadx/` and `<output>/fernflower/` respectively, with a comparison summary at the end showing file counts and jadx warning counts. Review classes with jadx warnings in the Fernflower output for better code.
 
-For APK files with Fernflower, the script automatically uses dex2jar as an intermediate step. dex2jar must be installed for this to work.
+For APK files with Fernflower, use dex2jar as an intermediate step. For AAR files, extract and analyze `classes.jar` and `libs/*.jar` directly; inspect per-JAR source directories. Choose a fresh output directory; nonempty output is rejected to prevent stale-result false positives.
 
 See `${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/references/jadx-usage.md` and `${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/references/fernflower-usage.md` for the full CLI references.
 
@@ -149,7 +151,7 @@ Navigate the decompiled output to understand the app's architecture.
    - Distinguish app code from third-party libraries
    - Look for packages named `api`, `network`, `data`, `repository`, `service`, `retrofit`, `http` — these are where API calls live
 
-3. **Read every `BuildConfig.java`** — these are almost never obfuscated and frequently leak the highest-signal constants in the entire APK (base URLs, flavor names, build type, third-party API keys, feature flags):
+3. **Read every `BuildConfig.java`** — when retained, these can reveal useful constants (base URLs, flavor names, build type, third-party API keys, feature flags):
    ```bash
    find <output>/sources -name BuildConfig.java -exec grep -H '=' {} \;
    ```
@@ -165,25 +167,23 @@ Navigate the decompiled output to understand the app's architecture.
 
 If Phase 0 reported moderate / high obfuscation **and** the app is Kotlin
 (Compose / kotlin_module markers detected), run the metadata recovery
-script before tracing call flows. R8 obfuscates JVM symbols but cannot
-strip Kotlin metadata strings, so original FQNs leak through
-`@DebugMetadata` and `@Metadata.d2`.
+script before tracing call flows. Use surviving `@DebugMetadata` as coroutine-owner hints. Metadata can be removed or rewritten; do not assume it preserves original names. Keep `@Metadata.d2` self-descriptor candidates separate from verified findings.
 
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/scripts/recover-kotlin-names.sh \
     <output>/sources <output>/mapping
 ```
 
-Then use the lookup helper instead of plain grep — every hit comes
-annotated with the owning class's real name:
+On Windows, invoke `recover-kotlin-names.ps1 <sources> <mapping>`. Inspect its JSON/TSV output directly.
+
+Then use the lookup helper instead of plain grep — mapped hits are annotated with a coroutine owner hint:
 
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/scripts/lookup-name.sh \
     <output>/mapping --grep '"/api/' <output>/sources
 ```
 
-Typical recovery on a real-world Kotlin app: ~100% of `*Repository` /
-`*ViewModel` / `*UseCase` / `*Impl` classes, ~80% of DTOs.
+Inspect `evidence.json` and `candidates.json`. Validate every proposed name against declarations and call sites; do not promise a recovery percentage or rename classes from unverified hints.
 
 See `${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/references/kotlin-name-recovery.md`
 for the full technique and limitations.
@@ -206,13 +206,13 @@ Follow execution paths from user-facing entry points down to network calls.
 
 4. **Map DI bindings** (if Dagger/Hilt is used): Find `@Module` classes to understand which implementations are provided for which interfaces.
 
-5. **Handle obfuscated code**: When class names are mangled, use string literals and library API calls as anchors. Retrofit annotations and URL strings are never obfuscated.
+5. **Handle obfuscated code**: When class names are mangled, use string literals and library API calls as anchors. Retained Retrofit annotations and URL strings can be useful anchors, but may be removed, inlined, or protected.
 
 See `${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/references/call-flow-analysis.md` for detailed techniques and grep commands.
 
 ### Phase 5: Extract and Document APIs
 
-Find all API endpoints and produce structured documentation.
+Find candidate API endpoints and produce structured documentation. Review matches manually; distinguish inferred paths from confirmed calls and document unknowns.
 
 **Action**: Run the API search script for a broad sweep.
 
@@ -224,6 +224,8 @@ On Windows (PowerShell):
 ```powershell
 & "${CLAUDE_PLUGIN_ROOT}/skills/android-reverse-engineering/scripts/find-api-calls.ps1" <output>/sources/
 ```
+
+Windows API searches also accept `-Ktor`, `-Apollo`, and `-Paths`, plus request-signing searches under `-Auth`.
 
 Targeted searches:
 ```bash

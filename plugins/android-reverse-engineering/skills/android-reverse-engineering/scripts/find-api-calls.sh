@@ -77,9 +77,11 @@ section() {
 }
 
 run_grep() {
+  local flags=()
+  if [[ "${1:-}" == "-i" ]]; then flags+=("-i"); shift; fi
   local pattern="$1"
   # shellcheck disable=SC2086
-  grep $GREP_OPTS -E "$pattern" "$SOURCE_DIR" 2>/dev/null || true
+  grep $GREP_OPTS "${flags[@]}" -E -- "$pattern" "$SOURCE_DIR" 2>/dev/null || true
 }
 
 # Print a one-screen summary FIRST so a reader knows what to expect from

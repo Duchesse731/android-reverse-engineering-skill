@@ -96,7 +96,7 @@ The `decompile.sh --engine fernflower` script automates these steps.
 | `.zip` (with classes) | Yes | — |
 | `.apk` | No | Yes |
 | `.dex` | No | Yes |
-| `.aar` | No | Yes |
+| `.aar` | Extract `classes.jar` and `libs/*.jar` first | Not needed |
 
 ## Output Format
 

@@ -1,5 +1,16 @@
 # Setup Guide: Dependencies for Android Reverse Engineering
 
+## Helper prerequisites
+
+Install Python 3 on every platform. Bash helpers require Bash 4+ and `unzip`;
+macOS system Bash 3 is unsupported. Windows helpers locate `python3`, `python`,
+or `py -3`. Re-run dependency checks after installation.
+
+Direct GitHub downloads are checked against the asset's published SHA-256
+digest. If it is absent, use a package manager or independently verified manual
+installation. Verification does not replace trust in the upstream publisher.
+
+
 ## Java JDK 17+
 
 jadx requires Java 17 or later.
